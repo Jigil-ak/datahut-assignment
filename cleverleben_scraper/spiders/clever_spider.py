@@ -1,5 +1,6 @@
 # This code follows PEP8 standards
 import scrapy
+import json
 from cleverleben_scraper.items import CleverlebenScraperItem
 
 
@@ -7,92 +8,144 @@ class CleverSpiderSpider(scrapy.Spider):
     """
     This spider crawls cleverleben.at to extract product data
     based on the Datahut assignment.
+    It uses the website's internal API for crawling
+    and scrapes product data from the product page.
     """
     name = 'clever_spider'
-    allowed_domains = ['cleverleben.at']
+    allowed_domains = ['cleverleben.at', 'clv-product-api.billa.at']
 
+    # 1. Start by calling the API for main categories
     def start_requests(self):
         """
-        Starts the crawl from the main product selection page.
+        Starts the crawl from the main category API.
         """
-        # 1. Start from the required Start URL 
         yield scrapy.Request(
-            url='https://www.cleverleben.at/produktauswahl',
+            url='https://clv-product-api.billa.at/api/v1/product-categories/root',
             callback=self.parse_main_categories
         )
 
+    # 2. Parse the API response for main categories
     def parse_main_categories(self, response):
         """
-        Parses the main categories page (Lebensmittel, Getränke, etc.)
-        and follows their links. 
+        Parses the JSON response for main categories (Lebensmittel, etc.)
+        and follows their links.
         """
-        # 2. Find all category links
-        # YOUR TASK: Find the XPath that selects the main category links
-        category_links = response.xpath("...").getall()
+        data = response.json()
         
-        for link in category_links:
-            yield response.follow(link, callback=self.parse_sub_categories)
+        # Loop through each main category found in the JSON
+        for category in data.get('subCategories', []):
+            category_slug = category.get('slug')
+            if category_slug:
+                # Build the URL for the next API call (sub-categories)
+                subcategory_url = f'https://clv-product-api.billa.at/api/v1/product-categories/{category_slug}'
+                yield response.follow(subcategory_url, callback=self.parse_sub_categories)
 
+    # 3. Parse the API response for sub-categories
     def parse_sub_categories(self, response):
         """
-        Parses a main category page to find sub-categories
-        (e.g., Brot & Backware). 
-        If no sub-categories exist, it treats the page as a product list.
+        Parses the JSON response for sub-categories (Brot & Backware, etc.).
+        If no sub-categories, it calls the product list parser.
         """
-        # 3. Find all sub-category links
-        # YOUR TASK: Find the XPath for sub-category links
-        subcategory_links = response.xpath("...").getall()
+        data = response.json()
+        subcategories = data.get('subCategories', [])
 
-        if subcategory_links:
-            # Found sub-categories, follow them
-            for link in subcategory_links:
-                yield response.follow(link, callback=self.parse_product_list)
+        if subcategories:
+            # Found sub-categories, loop through them
+            for subcat in subcategories:
+                subcat_slug = subcat.get('slug')
+                if subcat_slug:
+                    # Build the URL for the product list API
+                    product_list_url = f'https://clv-product-api.billa.at/api/v1/product-search/{subcat_slug}?page=1&size=24'
+                    yield response.follow(product_list_url, callback=self.parse_product_list)
         else:
-            # No sub-categories found, this must be a product list page
-            # We call the product list parser on the *current* response
-            yield from self.parse_product_list(response)
+            # No sub-categories, this page IS the product list.
+            # We call the product list parser on the *current* response's URL.
+            # We just need to change 'product-categories' to 'product-search'
+            product_list_url = response.url.replace(
+                'product-categories', 'product-search'
+            ) + '?page=1&size=24'
+            yield response.follow(product_list_url, callback=self.parse_product_list)
 
+    # 4. Parse the product list API and handle pagination
     def parse_product_list(self, response):
         """
-        Parses a product list page to find all product links 
-        and finds the 'next page' link for pagination. 
+        Parses the product list JSON, follows links to product pages,
+        and handles pagination by calling itself.
         """
+        data = response.json()
+
         # 4.1. Get all product URLs on the current page
-        # YOUR TASK: Find the XPath for all the product links
-        product_links = response.xpath("...").getall()
-        for link in product_links:
-            yield response.follow(link, callback=self.parse_product_details)
+        for product in data.get('products', []):
+            product_url = product.get('productUrl')
+            if product_url:
+                # Follow the link to the HTML product page
+                yield response.follow(
+                    f'https://www.cleverleben.at{product_url}',
+                    callback=self.parse_product_details
+                )
 
-        # 4.2. Find the 'Next Page' link for pagination 
-        # YOUR TASK: Find the XPath for the 'Next Page' button/link
-        next_page = response.xpath("...").get()
-        
-        if next_page:
-            yield response.follow(next_page, callback=self.parse_product_list)
+        # 4.2. Find the 'Next Page' for pagination
+        pagination = data.get('pagination', {})
+        current_page = pagination.get('page', 1)
+        total_pages = pagination.get('totalPages', 1)
 
+        if current_page < total_pages:
+            # Build the URL for the next page
+            next_page = current_page + 1
+            # response.url already contains '?page=...'. We replace it.
+            next_page_url = response.url.replace(
+                f'page={current_page}', f'page={next_page}'
+            )
+            yield response.follow(next_page_url, callback=self.parse_product_list)
+
+    # 5. This is the PARSER. Extract the final data from the HTML page.
     def parse_product_details(self, response):
         """
-        This is the final parser. It's on a product detail page 
-        and extracts all 10 required data fields. [cite: 161]
+        This is the final parser. It's on a product detail page
+        and extracts all 10 required data fields.
+        
+        The data is in a <script> tag as a JSON object. We will
+        use XPath to find the script, then parse the JSON.
         """
-        # Create a new item to fill with data
-        item = CleverlebenScraperItem()
+        
+        # This XPath finds the correct, large data script
+        script_data = response.xpath(
+            "//script[contains(., 'window.__NUXT__') and contains(., 'productDetail')]/text()"
+        ).get()
 
-        # 5. Extract all data fields using XPath [cite: 21]
-        # YOUR TASK: Fill in all the XPaths for the 10 items
-        # Use the example PDF image as your guide! [cite: 109-153]
+        if not script_data:
+            self.logger.error(f"Could not find __NUXT__ data on {response.url}")
+            return
 
-        item['product_url'] = response.url
-        item['product_name'] = response.xpath("...").get()
-        item['price'] = response.xpath("...").get()
-        item['image'] = response.xpath("...").getall() # Use .getall() for images
-        item['product_description'] = response.xpath("...").getall()
-        item['unique_id'] = response.xpath("...").get()
-        item.setdefault('ingredients', None) # Set a default for optional fields
-        item['ingredients'] = response.xpath("...").get()
-        item.setdefault('details', None) # Set a default for optional fields
-        item['details'] = response.xpath("...").get()
-        item['currency'] = response.xpath("...").get()
-        item['product_id'] = response.xpath("...").get()
+        # Clean the data (it starts with 'window.__NUXT__=' and ends with ';')
+        json_string = script_data.split('window.__NUXT__=')[1].strip(';')
+        
+        try:
+            # Parse the string as JSON
+            nuxt_data = json.loads(json_string)
+            
+            # The product data is buried deep inside
+            product = nuxt_data.get('data', [{}])[0].get('productDetail', {})
 
-        yield item
+            if not product:
+                self.logger.error(f"Could not find productDetail in JSON on {response.url}")
+                return
+
+            # --- All 10 fields are now filled in ---
+            item = CleverlebenScraperItem()
+            item['product_url'] = response.url
+            item['product_name'] = product.get('name')
+            item['price'] = product.get('price', {}).get('value')
+            item['currency'] = product.get('price', {}).get('currencyIso')
+            item['image'] = [img.get('url') for img in product.get('images', [])]
+            item['product_description'] = product.get('description')
+            item['unique_id'] = product.get('code')
+            item['ingredients'] = product.get('ingredients')
+            item['details'] = product.get('productInformation')
+            item['product_id'] = product.get('code')
+            # --- End of fields ---
+
+            yield item
+
+        except json.JSONDecodeError:
+            self.logger.error(f"Failed to parse JSON on {response.url}")
