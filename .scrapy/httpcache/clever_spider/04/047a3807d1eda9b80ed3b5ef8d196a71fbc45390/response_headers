@@ -1,0 +1,22 @@
+Content-Length: 610694
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+X-Download-Options: noopen
+X-Frame-Options: SAMEORIGIN
+X-Permitted-Cross-Domain-Policies: none
+X-Xss-Protection: 0
+Vary: Accept-Encoding
+Access-Control-Allow-Origin: *
+Cross-Origin-Resource-Policy: cross-origin
+Cross-Origin-Opener-Policy: same-origin-allow-popups
+Content-Security-Policy: base-uri 'none'; font-src 'self' https: data:; form-action 'self' https://payment.preprod.payone.com https://payment.payone.com; frame-ancestors 'none'; img-src 'self' data: https:; object-src 'none'; script-src-attr 'none'; style-src 'self' https: 'unsafe-inline'; script-src 'unsafe-inline' 'unsafe-eval' https: http://localhost:8080; upgrade-insecure-requests;
+Origin-Agent-Cluster: ?1
+X-Dns-Prefetch-Control: off
+Permissions-Policy: camera=(), display-capture=(), fullscreen=(self), geolocation=(self), microphone=()
+Content-Type: text/html;charset=utf-8
+Date: Sat, 15 Nov 2025 17:23:11 GMT
+X-Envoy-Upstream-Service-Time: 113
+Server: istio-envoy
+Via: 1.1 google
+Alt-Svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000

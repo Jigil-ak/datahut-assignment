@@ -15,8 +15,8 @@ Origin-Agent-Cluster: ?1
 X-Dns-Prefetch-Control: off
 Permissions-Policy: camera=(), display-capture=(), fullscreen=(self), geolocation=(self), microphone=()
 Content-Type: text/html;charset=utf-8
-Date: Sat, 15 Nov 2025 15:38:06 GMT
-X-Envoy-Upstream-Service-Time: 60
+Date: Sat, 15 Nov 2025 17:20:59 GMT
+X-Envoy-Upstream-Service-Time: 8
 Server: istio-envoy
 Via: 1.1 google
 Alt-Svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
