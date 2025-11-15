@@ -1,0 +1,19 @@
+Content-Length: 47
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+X-Download-Options: noopen
+X-Frame-Options: SAMEORIGIN
+X-Permitted-Cross-Domain-Policies: none
+X-Xss-Protection: 0
+Vary: Accept-Encoding
+Access-Control-Allow-Origin: *
+Last-Modified: Sat, 15 Nov 2025 15:12:40 GMT
+Etag: W/"jUN3767vbM"
+Cache-Control: s-maxage=1, stale-while-revalidate
+Content-Type: text/html
+Date: Sat, 15 Nov 2025 15:26:25 GMT
+X-Envoy-Upstream-Service-Time: 2
+Server: istio-envoy
+Via: 1.1 google
+Alt-Svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000

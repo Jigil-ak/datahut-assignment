@@ -1,13 +1,11 @@
 import scrapy
 
-class CleverlebenScraperItem(scrapy.Item):
-    
-    """ Defines the data fields to be scraped, based on the assignment PDF. """
-    
+class CleverlebenItem(scrapy.Item):
+    # Required fields from the PDF
     product_url = scrapy.Field()
     product_name = scrapy.Field()
     price = scrapy.Field()
-    image = scrapy.Field()
+    image = scrapy.Field()  # This will be a list
     product_description = scrapy.Field()
     unique_id = scrapy.Field()
     ingredients = scrapy.Field()

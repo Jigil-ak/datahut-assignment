@@ -1,151 +1,209 @@
-# This code follows PEP8 standards
 import scrapy
+from cleverleben_scraper.items import CleverlebenItem
+from urllib.parse import urljoin
+import re
 import json
-from cleverleben_scraper.items import CleverlebenScraperItem
 
-
-class CleverSpiderSpider(scrapy.Spider):
-    """
-    This spider crawls cleverleben.at to extract product data
-    based on the Datahut assignment.
-    It uses the website's internal API for crawling
-    and scrapes product data from the product page.
-    """
+class CleverSpider(scrapy.Spider):
     name = 'clever_spider'
-    allowed_domains = ['cleverleben.at', 'clv-product-api.billa.at']
+    allowed_domains = ['cleverleben.at']
+    start_urls = ['https://www.cleverleben.at/produktauswahl']
+    
+    custom_settings = {
+        'CONCURRENT_REQUESTS': 2,
+        'DOWNLOAD_DELAY': 1,
+        'AUTOTHROTTLE_ENABLED': True,
+    }
 
-    # 1. Start by calling the API for main categories
-    def start_requests(self):
+    def parse(self, response):
         """
-        Starts the crawl from the main category API.
+        Parse the main produktauswahl page and extract category links
         """
-        yield scrapy.Request(
-            url='https://clv-product-api.billa.at/api/v1/product-categories/root',
-            callback=self.parse_main_categories
-        )
-
-    # 2. Parse the API response for main categories
-    def parse_main_categories(self, response):
-        """
-        Parses the JSON response for main categories (Lebensmittel, etc.)
-        and follows their links.
-        """
-        data = response.json()
+        self.logger.info(f"Parsing main page: {response.url}")
         
-        # Loop through each main category found in the JSON
-        for category in data.get('subCategories', []):
-            category_slug = category.get('slug')
-            if category_slug:
-                # Build the URL for the next API call (sub-categories)
-                subcategory_url = f'https://clv-product-api.billa.at/api/v1/product-categories/{category_slug}'
-                yield response.follow(subcategory_url, callback=self.parse_sub_categories)
-
-    # 3. Parse the API response for sub-categories
-    def parse_sub_categories(self, response):
-        """
-        Parses the JSON response for sub-categories (Brot & Backware, etc.).
-        If no sub-categories, it calls the product list parser.
-        """
-        data = response.json()
-        subcategories = data.get('subCategories', [])
-
-        if subcategories:
-            # Found sub-categories, loop through them
-            for subcat in subcategories:
-                subcat_slug = subcat.get('slug')
-                if subcat_slug:
-                    # Build the URL for the product list API
-                    product_list_url = f'https://clv-product-api.billa.at/api/v1/product-search/{subcat_slug}?page=1&size=24'
-                    yield response.follow(product_list_url, callback=self.parse_product_list)
-        else:
-            # No sub-categories, this page IS the product list.
-            # We call the product list parser on the *current* response's URL.
-            # We just need to change 'product-categories' to 'product-search'
-            product_list_url = response.url.replace(
-                'product-categories', 'product-search'
-            ) + '?page=1&size=24'
-            yield response.follow(product_list_url, callback=self.parse_product_list)
-
-    # 4. Parse the product list API and handle pagination
-    def parse_product_list(self, response):
-        """
-        Parses the product list JSON, follows links to product pages,
-        and handles pagination by calling itself.
-        """
-        data = response.json()
-
-        # 4.1. Get all product URLs on the current page
-        for product in data.get('products', []):
-            product_url = product.get('productUrl')
-            if product_url:
-                # Follow the link to the HTML product page
-                yield response.follow(
-                    f'https://www.cleverleben.at{product_url}',
-                    callback=self.parse_product_details
-                )
-
-        # 4.2. Find the 'Next Page' for pagination
-        pagination = data.get('pagination', {})
-        current_page = pagination.get('page', 1)
-        total_pages = pagination.get('totalPages', 1)
-
-        if current_page < total_pages:
-            # Build the URL for the next page
-            next_page = current_page + 1
-            # response.url already contains '?page=...'. We replace it.
-            next_page_url = response.url.replace(
-                f'page={current_page}', f'page={next_page}'
-            )
-            yield response.follow(next_page_url, callback=self.parse_product_list)
-
-    # 5. This is the PARSER. Extract the final data from the HTML page.
-    def parse_product_details(self, response):
-        """
-        This is the final parser. It's on a product detail page
-        and extracts all 10 required data fields.
+        # Extract the main category links we found
+        main_categories = [
+            '/lebensmittel',
+            '/getraenke', 
+            '/haushalt-hygiene',
+            '/tiernahrung'
+        ]
         
-        The data is in a <script> tag as a JSON object. We will
-        use XPath to find the script, then parse the JSON.
-        """
-        
-        # This XPath finds the correct, large data script
-        script_data = response.xpath(
-            "//script[contains(., 'window.__NUXT__') and contains(., 'productDetail')]/text()"
-        ).get()
-
-        if not script_data:
-            self.logger.error(f"Could not find __NUXT__ data on {response.url}")
-            return
-
-        # Clean the data (it starts with 'window.__NUXT__=' and ends with ';')
-        json_string = script_data.split('window.__NUXT__=')[1].strip(';')
-        
-        try:
-            # Parse the string as JSON
-            nuxt_data = json.loads(json_string)
+        for category_path in main_categories:
+            category_url = urljoin(response.url, category_path)
+            self.logger.info(f"Processing category: {category_url}")
             
-            # The product data is buried deep inside
-            product = nuxt_data.get('data', [{}])[0].get('productDetail', {})
+            yield scrapy.Request(
+                url=category_url,
+                callback=self.parse_category,
+                meta={'category': category_path.replace('/', '')}
+            )
 
-            if not product:
-                self.logger.error(f"Could not find productDetail in JSON on {response.url}")
-                return
+    def parse_category(self, response):
+        """
+        Parse category page and extract product links with pagination
+        """
+        self.logger.info(f"Parsing category: {response.url}")
+        
+        # Extract product links - try multiple selectors
+        product_selectors = [
+            '//a[contains(@href, "/produkt/")]/@href',
+            '//a[contains(@href, "produkt")]/@href',
+        ]
+        
+        product_links = []
+        for selector in product_selectors:
+            links = response.xpath(selector).getall()
+            if links:
+                product_links.extend(links)
+        
+        # Clean and deduplicate product links
+        product_links = list(set([urljoin(response.url, link) for link in product_links if link]))
+        
+        self.logger.info(f"Found {len(product_links)} product links on {response.url}")
+        
+        for product_link in product_links:
+            yield scrapy.Request(
+                url=product_link,
+                callback=self.parse_product,
+                meta={'category': response.meta.get('category', 'Unknown')}
+            )
+        
+        # Handle pagination - try multiple selectors
+        next_selectors = [
+            '//a[contains(@class, "next")]/@href',
+            '//a[contains(@rel, "next")]/@href',
+            '//a[contains(text(), "Weiter")]/@href',
+            '//a[contains(text(), "Next")]/@href',
+            '//a[@aria-label="Next"]/@href'
+        ]
+        
+        for selector in next_selectors:
+            next_page = response.xpath(selector).get()
+            if next_page:
+                full_next_url = urljoin(response.url, next_page)
+                self.logger.info(f"Found next page: {full_next_url}")
+                yield scrapy.Request(
+                    url=full_next_url,
+                    callback=self.parse_category,
+                    meta={'category': response.meta.get('category', 'Unknown')}
+                )
+                break
 
-            # --- All 10 fields are now filled in ---
-            item = CleverlebenScraperItem()
-            item['product_url'] = response.url
-            item['product_name'] = product.get('name')
-            item['price'] = product.get('price', {}).get('value')
-            item['currency'] = product.get('price', {}).get('currencyIso')
-            item['image'] = [img.get('url') for img in product.get('images', [])]
-            item['product_description'] = product.get('description')
-            item['unique_id'] = product.get('code')
-            item['ingredients'] = product.get('ingredients')
-            item['details'] = product.get('productInformation')
-            item['product_id'] = product.get('code')
-            # --- End of fields ---
-
+    def parse_product(self, response):
+        """
+        Parse individual product page and extract all required fields
+        """
+        item = CleverlebenItem()
+        
+        # Extract product URL
+        item['product_url'] = response.url
+        
+        # Extract product name
+        name_selectors = [
+            '//h1//text()',
+            '//title/text()',
+            '//meta[@property="og:title"]/@content'
+        ]
+        
+        for selector in name_selectors:
+            product_name = response.xpath(selector).get()
+            if product_name and product_name.strip():
+                item['product_name'] = product_name.strip()
+                break
+        
+        # Extract price
+        price_selectors = [
+            '//span[contains(@class, "price")]//text()',
+            '//meta[@property="product:price:amount"]/@content',
+            '//div[contains(@class, "price")]//text()',
+            '//*[contains(@class, "currency")]/preceding-sibling::text()'
+        ]
+        
+        for selector in price_selectors:
+            price_text = response.xpath(selector).get()
+            if price_text:
+                # Clean price - extract numbers and decimals
+                price_match = re.search(r'(\d+[.,]\d+|\d+)', price_text)
+                if price_match:
+                    item['price'] = price_match.group(1).replace(',', '.')
+                    break
+        
+        # Extract images
+        image_selectors = [
+            '//img[contains(@src, "produkt")]/@src',
+            '//img[contains(@alt, "product")]/@src',
+            '//div[contains(@class, "product-image")]//img/@src',
+            '//meta[@property="og:image"]/@content'
+        ]
+        
+        images = []
+        for selector in image_selectors:
+            found_images = response.xpath(selector).getall()
+            if found_images:
+                images.extend(found_images)
+        
+        item['image'] = [urljoin(response.url, img) for img in set(images) if img]
+        
+        # Extract product description
+        desc_selectors = [
+            '//meta[@name="description"]/@content',
+            '//div[contains(@class, "description")]//text()',
+            '//p[contains(@class, "description")]//text()'
+        ]
+        
+        description_parts = []
+        for selector in desc_selectors:
+            descriptions = response.xpath(selector).getall()
+            for desc in descriptions:
+                if desc and desc.strip():
+                    description_parts.append(desc.strip())
+        
+        if description_parts:
+            item['product_description'] = ' '.join(description_parts)
+        
+        # Extract unique_id from URL
+        unique_id_match = re.search(r'-(\d+)$', response.url) or re.search(r'/(\d+)$', response.url)
+        if unique_id_match:
+            item['unique_id'] = unique_id_match.group(1)
+        else:
+            # Fallback: use last part of URL
+            item['unique_id'] = response.url.split('/')[-1]
+        
+        # Extract ingredients
+        ingredients_selectors = [
+            '//td[contains(text(), "Zutaten")]/following-sibling::td//text()',
+            '//div[contains(text(), "Zutaten")]/following-sibling::div//text()',
+            '//h3[contains(text(), "Zutaten")]/following-sibling::p//text()',
+            '//*[contains(text(), "Zutaten")]/following::text()[1]'
+        ]
+        
+        for selector in ingredients_selectors:
+            ingredients = response.xpath(selector).get()
+            if ingredients and ingredients.strip():
+                item['ingredients'] = ingredients.strip()
+                break
+        
+        # Extract details
+        details_selectors = [
+            '//td[contains(text(), "Produktinformation")]/following-sibling::td//text()',
+            '//div[contains(text(), "Produktinformation")]/following-sibling::div//text()',
+            '//h2[contains(text(), "Produktinformation")]/following-sibling::p//text()'
+        ]
+        
+        for selector in details_selectors:
+            details = response.xpath(selector).get()
+            if details and details.strip():
+                item['details'] = details.strip()
+                break
+        
+        # Default values
+        item['currency'] = '€'
+        item['product_id'] = item.get('unique_id', '')
+        
+        # Only yield if we have at least a product name
+        if item.get('product_name'):
+            self.logger.info(f"Successfully extracted product: {item['product_name']}")
             yield item
-
-        except json.JSONDecodeError:
-            self.logger.error(f"Failed to parse JSON on {response.url}")
+        else:
+            self.logger.warning(f"No product name found for {response.url}")
